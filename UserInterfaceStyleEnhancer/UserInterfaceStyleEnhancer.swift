@@ -45,20 +45,33 @@ public class UISEManager: NSObject {
             if newValue == lightGetter() { return }
             lightSetter(newValue)
             NSObject.uise_userInterfaceStyleChanged(newValue)
-            if sync { return }
             syncUserInterfaceStyleForWindows()
         }
     }
     
+    @objc public static var backgroundSync = false
+    
     private static func syncUserInterfaceStyleForWindows() {
-        let style: UIUserInterfaceStyle = sync ? .unspecified : (light ? .light : .dark)
+        let observerStyle: UIUserInterfaceStyle = sync ? .unspecified : (light ? .light : .dark)
+        let style: UIUserInterfaceStyle = backgroundSync ? observerStyle : (light ? .light : .dark)
         Task { @MainActor in
-            windows.allObjects.forEach { if $0.overrideUserInterfaceStyle != style { $0.overrideUserInterfaceStyle = style } }
+            windows.allObjects.forEach {
+                if $0 == Self.observer {
+                    if $0.overrideUserInterfaceStyle != observerStyle { $0.overrideUserInterfaceStyle = observerStyle }
+                } else {
+                    if $0.overrideUserInterfaceStyle != style { $0.overrideUserInterfaceStyle = style }
+                }
+            }
         }
     }
     
+    private static let observer = UISEWindow(frame: UIScreen.main.bounds)
     private static let windows = NSHashTable<UIWindow>.weakObjects()
     @objc public static func addWindow(_ window: UIWindow) {
+        windows.add(observer)
+        if observer.windowScene == nil {
+            observer.windowScene = window.windowScene ?? (UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        }
         windows.add(window)
         syncUserInterfaceStyleForWindows()
     }
@@ -67,16 +80,10 @@ public class UISEManager: NSObject {
 
 // MARK: - observer
 
-@objcMembers public class UISEWindow: UIWindow {
-    public override init(windowScene: UIWindowScene) {
-        super.init(windowScene: windowScene)
-        uise_setup()
-    }
+fileprivate class UISEWindow: UIWindow {
     public override init(frame: CGRect) {
         super.init(frame: frame)
-        uise_setup()
-    }
-    private func uise_setup() {
+        backgroundColor = .clear
         uise_reloadLightIfNeeded()
         NotificationCenter.default.addObserver(
             self,
@@ -90,11 +97,22 @@ public class UISEManager: NSObject {
             }
         }
     }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
     deinit { NotificationCenter.default.removeObserver(self) }
+    
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        false
+    }
+    
     public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         if #available(iOS 17.0, *) { } else { uise_reloadLightIfNeeded() }
         super.traitCollectionDidChange(previousTraitCollection)
     }
+    
     @objc private func uise_reloadLightIfNeeded() {
         guard UISEManager.sync, Thread.isMainThread, UIApplication.shared.applicationState != .background else { return }
         switch traitCollection.userInterfaceStyle {
@@ -102,9 +120,6 @@ public class UISEManager: NSObject {
         case .dark: UISEManager.light = false
         default: return
         }
-    }
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
     }
 }
 
